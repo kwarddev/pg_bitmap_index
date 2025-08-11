@@ -1,0 +1,137 @@
+#include "postgres.h"
+
+#include "access/amapi.h"
+#include "access/generic_xlog.h"
+#include "access/reloptions.h"
+#include "commands/vacuum.h"
+#include "storage/bufmgr.h"
+#include "storage/indexfsm.h"
+#include "utils/memutils.h"
+#include "access/tableam.h"
+
+PG_MODULE_MAGIC;
+
+static IndexBuildResult *pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo);
+static bool pg_bitmap_validate(Oid opclassoid);
+Datum pg_bitmap_index_handler(PG_FUNCTION_ARGS);
+
+typedef struct BitmapEntry {
+  Datum key;
+  uint8 *bitmap;
+} BitmapEntry;
+
+typedef struct BitmapBuildState {
+  HTAB *bitmap_hash;
+  uint64 rownum;
+  uint64 nrows;
+} BitmapBuildState;
+
+PG_FUNCTION_INFO_V1(pg_bitmap_index_handler);
+
+Datum
+pg_bitmap_index_handler(PG_FUNCTION_ARGS)
+{
+  IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
+
+  amroutine->amstrategies = 0;
+  amroutine->amsupport = 0;
+  amroutine->amcanorder = false;
+  amroutine->amcanunique = false;
+  amroutine->amcanmulticol = false;
+  amroutine->amoptionalkey = false;
+  amroutine->amsearcharray = false;
+  amroutine->amsearchnulls = false;
+  amroutine->amgettuple = NULL;
+  amroutine->amgetbitmap = NULL;
+  amroutine->amcanparallel = false;
+  amroutine->amcaninclude = false;
+
+  amroutine->ambuild = pg_bitmap_build;
+  amroutine->ambuildempty = NULL;
+  amroutine->aminsert = NULL;
+  amroutine->ambulkdelete = NULL;
+  amroutine->amvacuumcleanup = NULL;
+  amroutine->amcanreturn = NULL;
+  amroutine->amoptions = NULL;
+  amroutine->amvalidate = pg_bitmap_validate;
+  amroutine->ambeginscan = NULL;
+  amroutine->amrescan = NULL;
+  amroutine->amgettuple = NULL;
+  amroutine->amgetbitmap = NULL;
+  amroutine->amendscan = NULL;
+  amroutine->ammarkpos = NULL;
+  amroutine->amrestrpos = NULL;
+
+  PG_RETURN_POINTER(amroutine);
+}
+
+static void
+pg_bitmap_build_callback(Relation index,
+                         ItemPointer tid,
+                         Datum *values,
+                         bool *isnull,
+                         bool tupleIsAlive,
+                         void *state)
+{
+  // Log the value of the first indexed column for each row
+  if (!isnull[0]) {
+    elog(INFO, "Row: value=%ld, tupleIsAlive=%s, TID=(%u,%u)",
+      DatumGetInt64(values[0]),
+      tupleIsAlive ? "true" : "false",
+      ItemPointerGetBlockNumber(tid),
+      ItemPointerGetOffsetNumber(tid));
+  } else {
+    elog(INFO, "Row: value=NULL, tupleIsAlive=%s, TID=(%u,%u)",
+      tupleIsAlive ? "true" : "false",
+      ItemPointerGetBlockNumber(tid),
+      ItemPointerGetOffsetNumber(tid));
+  }
+
+}
+
+static IndexBuildResult *
+pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo)
+{
+  IndexBuildResult *result;
+	double reltuples;
+	BitmapBuildState buildstate;
+
+	if (RelationGetNumberOfBlocks(index) != 0)
+		elog(ERROR, "index \"%s\" already contains data",
+			 RelationGetRelationName(index));
+
+	/* Initialize the meta page */
+	// BitmapInitMetapage(index, MAIN_FORKNUM);
+
+	/* Initialize the bitmap build state */
+	memset(&buildstate, 0, sizeof(buildstate));
+	// initBitmapState(&buildstate.bmstate, index);
+	// buildstate.tmpCtx = AllocSetContextCreate(CurrentMemoryContext,
+	// 										  "Bitmap build temporary context",
+	// 										  ALLOCSET_DEFAULT_SIZES);
+	// initCachedPage(&buildstate);
+
+	/* Do the heap scan */
+	reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
+									   pg_bitmap_build_callback, &buildstate,
+									   NULL);
+
+	/* Flush last page if needed (it will be, unless heap was empty) */
+	// if (buildstate.count > 0)
+	// 	flushCachedPage(index, &buildstate);
+
+	// MemoryContextDelete(buildstate.tmpCtx);
+
+	// result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
+	// result->heap_tuples = reltuples;
+	// result->index_tuples = buildstate.indtuples;
+
+	return NULL;
+}
+
+static bool
+pg_bitmap_validate(Oid opclassoid)
+{
+    /* Optional: Add validation logic if needed */
+    return true;
+}
