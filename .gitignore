@@ -1,0 +1,23 @@
+# Compiled files
+*.o
+*.so
+*.dylib
+#
+# Build directories
+/build/
+/tmp/
+
+# Regression test output
+/regression.diffs
+/regression.out
+/results/
+#
+# Editor files
+*.swp
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

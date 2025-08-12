@@ -8,6 +8,7 @@
 #include "storage/indexfsm.h"
 #include "utils/memutils.h"
 #include "access/tableam.h"
+#include "utils/hsearch.h"
 
 PG_MODULE_MAGIC;
 
@@ -73,20 +74,56 @@ pg_bitmap_build_callback(Relation index,
                          bool tupleIsAlive,
                          void *state)
 {
-  // Log the value of the first indexed column for each row
-  if (!isnull[0]) {
-    elog(INFO, "Row: value=%ld, tupleIsAlive=%s, TID=(%u,%u)",
-      DatumGetInt64(values[0]),
-      tupleIsAlive ? "true" : "false",
-      ItemPointerGetBlockNumber(tid),
-      ItemPointerGetOffsetNumber(tid));
-  } else {
-    elog(INFO, "Row: value=NULL, tupleIsAlive=%s, TID=(%u,%u)",
-      tupleIsAlive ? "true" : "false",
-      ItemPointerGetBlockNumber(tid),
-      ItemPointerGetOffsetNumber(tid));
+  BitmapBuildState *buildstate = (BitmapBuildState *) state;
+  HASHACTION action;
+  BitmapEntry *entry;
+  bool found;
+  uint64 bitmap_size;
+  uint64 byte_index;
+  uint8 bit_mask;
+
+  /* Skip null values for now */
+  if (isnull[0])
+    return;
+
+  /* Initialize hash table on first call */
+  if (buildstate->bitmap_hash == NULL)
+  {
+    HASHCTL hash_ctl;
+
+    memset(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize = sizeof(Datum);
+    hash_ctl.entrysize = sizeof(BitmapEntry);
+    hash_ctl.hcxt = CurrentMemoryContext;
+
+    buildstate->bitmap_hash = hash_create("Bitmap Build Hash",
+                                          256,
+                                          &hash_ctl,
+                                          HASH_ELEM | HASH_CONTEXT);
   }
 
+  /* Look up or create entry for this key value */
+  action = HASH_ENTER;
+  entry = (BitmapEntry *) hash_search(buildstate->bitmap_hash,
+                                       &values[0],
+                                       action,
+                                       &found);
+
+  /* If new entry, initialize bitmap */
+  if (!found)
+  {
+    /* Calculate bitmap size (one bit per row, rounded up to bytes) */
+    bitmap_size = (buildstate->nrows + 7) / 8;
+    entry->key = values[0];
+    entry->bitmap = (uint8 *) palloc0(bitmap_size);
+  }
+
+  /* Set the bit for this row in the bitmap */
+  byte_index = buildstate->rownum / 8;
+  bit_mask = 1 << (buildstate->rownum % 8);
+  entry->bitmap[byte_index] |= bit_mask;
+
+  buildstate->rownum++;
 }
 
 static IndexBuildResult *
@@ -95,38 +132,61 @@ pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo)
   IndexBuildResult *result;
 	double reltuples;
 	BitmapBuildState buildstate;
+	uint64 total_rows;
+	HASH_SEQ_STATUS hash_seq;
+	BitmapEntry *entry;
+	Buffer buffer;
+	Page page;
+	GenericXLogState *state;
 
 	if (RelationGetNumberOfBlocks(index) != 0)
 		elog(ERROR, "index \"%s\" already contains data",
 			 RelationGetRelationName(index));
 
-	/* Initialize the meta page */
-	// BitmapInitMetapage(index, MAIN_FORKNUM);
-
 	/* Initialize the bitmap build state */
 	memset(&buildstate, 0, sizeof(buildstate));
-	// initBitmapState(&buildstate.bmstate, index);
-	// buildstate.tmpCtx = AllocSetContextCreate(CurrentMemoryContext,
-	// 										  "Bitmap build temporary context",
-	// 										  ALLOCSET_DEFAULT_SIZES);
-	// initCachedPage(&buildstate);
+	buildstate.bitmap_hash = NULL;
+	buildstate.rownum = 0;
+
+	/* Get total number of rows for bitmap sizing */
+	total_rows = RelationGetNumberOfBlocks(heap) * MaxHeapTuplesPerPage;
+	buildstate.nrows = total_rows;
 
 	/* Do the heap scan */
 	reltuples = table_index_build_scan(heap, index, indexInfo, true, true,
 									   pg_bitmap_build_callback, &buildstate,
 									   NULL);
 
-	/* Flush last page if needed (it will be, unless heap was empty) */
-	// if (buildstate.count > 0)
-	// 	flushCachedPage(index, &buildstate);
+	/* Now write the bitmap data to the index pages */
+	if (buildstate.bitmap_hash != NULL)
+	{
+		uint32 nentries = 0;
 
-	// MemoryContextDelete(buildstate.tmpCtx);
+		/* Count entries */
+		hash_seq_init(&hash_seq, buildstate.bitmap_hash);
+		while ((entry = (BitmapEntry *) hash_seq_search(&hash_seq)) != NULL)
+			nentries++;
 
-	// result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
-	// result->heap_tuples = reltuples;
-	// result->index_tuples = buildstate.indtuples;
+		/* For now, just log the statistics */
+		elog(INFO, "Bitmap index built: %u unique values, %.0f total rows",
+			 nentries, reltuples);
 
-	return NULL;
+		/* TODO: Write bitmap data to index pages */
+		/* This would involve:
+		 * 1. Creating index pages using GenericXLog
+		 * 2. Writing bitmap entries to pages
+		 * 3. Creating a metapage with index statistics
+		 */
+
+		/* Clean up hash table */
+		hash_destroy(buildstate.bitmap_hash);
+	}
+
+	result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
+	result->heap_tuples = reltuples;
+	result->index_tuples = reltuples;  /* For bitmap index, this is the same */
+
+	return result;
 }
 
 static bool
