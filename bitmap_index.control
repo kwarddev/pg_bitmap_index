@@ -1,4 +1,4 @@
 comment = 'Bitmap-style index access method for low-cardinality fields'
 default_version = '0.1'
-module_pathname = '$libdir/pg_bitmap_index'
+module_pathname = '$libdir/bitmap_index'
 relocatable = true
