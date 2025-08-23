@@ -41,6 +41,9 @@ makeDefaultBitmapOptions(void)
   return opts;
 }
 
+/*
+ * Fill in in blank metaPage with metadata values
+ */
 void
 BitmapFillMetapage(Relation index, Page metaPage) {
   BitmapOptions *opts;
