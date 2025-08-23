@@ -1,13 +1,4 @@
-#include "access/amapi.h"
-#include "access/generic_xlog.h"
-#include "access/reloptions.h"
 #include "bitmap.h"
-#include "commands/vacuum.h"
-#include "storage/bufmgr.h"
-#include "storage/indexfsm.h"
-#include "utils/memutils.h"
-#include "access/tableam.h"
-#include "utils/hsearch.h"
 
 PG_MODULE_MAGIC;
 
@@ -15,17 +6,6 @@ static IndexBuildResult *bmapbuild(Relation heap, Relation index, struct IndexIn
 static bool bitmap_index_validate(Oid opclassoid);
 void BitmapInitMetapage(Relation index, ForkNumber forknum);
 Datum bitmap_index_handler(PG_FUNCTION_ARGS);
-
-typedef struct BitmapEntry {
-  Datum key;
-  uint8 *bitmap;
-} BitmapEntry;
-
-typedef struct BitmapBuildState {
-  HTAB *bitmap_hash;
-  uint64 rownum;
-  uint64 nrows;
-} BitmapBuildState;
 
 PG_FUNCTION_INFO_V1(bitmap_index_handler);
 
@@ -67,17 +47,17 @@ bitmap_index_handler(PG_FUNCTION_ARGS)
 }
 
 static void
-bitmap_index_build_callback(Relation index,
-                         ItemPointer tid,
-                         Datum *values,
-                         bool *isnull,
-                         bool tupleIsAlive,
-                         void *state)
+bmapBuildCallback(Relation index,
+                  ItemPointer tid,
+                  Datum *values,
+                  bool *isnull,
+                  bool tupleIsAlive,
+                  void *state)
 {
 }
 
 /*
- * pg_bitmap_build() -- build a new bitmap index.
+ * bmapbuild() -- build a new bitmap index.
  */
 static IndexBuildResult *
 bmapbuild(Relation heap, Relation index, struct IndexInfo *indexInfo)
@@ -93,8 +73,11 @@ bmapbuild(Relation heap, Relation index, struct IndexInfo *indexInfo)
 		elog(ERROR, "index \"%s\" already contains data",
 			 RelationGetRelationName(index));
 
-
   BitmapInitMetaPage(index, MAIN_FORKNUM);
+
+  /* Initialize the bitmap build state */
+  memset(&buildstate, 0, sizeof(buildstate));
+  initBitmapState(&buildstate, index);
 
 	return result;
 }

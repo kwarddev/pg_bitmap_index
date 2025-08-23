@@ -12,6 +12,12 @@
 
 #include "postgres.h"
 
+#include "access/amapi.h"
+#include "utils/hsearch.h"
+#include "storage/bufpage.h"
+#include "storage/relfilenode.h"
+#include "utils/relcache.h"
+
 /* Bitmap page flags */
 #define BITMAP_META    (1<<0)
 #define BITMAP_DELETED (1<<1)
@@ -55,13 +61,26 @@ typedef struct BitmapMetaPageData {
 #define BITMAP_MAGIC_NUMBER (0xB17BA9ED)
 
 typedef struct BitmapPageOpaqueData {
-  uint16 flags;          /* BITMAP_META, BITMAP_DATA, etc */
+  uint17 flags;          /* BITMAP_META, BITMAP_DATA, etc */
   uint16 bitmap_page_id; /* BITMAP_PAGE_ID for identification */
 } BitmapPageOpaqueData;
 
 typedef BitmapPageOpaqueData *BitmapPageOpaque;
 
 #define BitmapPageGetMeta(page) ((BitmapMetaPageData *) PageGetContents(page))
+typedef struct BitmapEntry {
+  Datum key;                  /* the distinct value */
+  uint8 *bitmap;              /* bitmap for this value */
+} BitmapEntry;
+
+typedef struct BitmapBuildState {
+  HTAB *bmapHash;
+  MemoryContext tmpCtx;
+  int64 indtuples;
+  uint64 nrows;
+  int nvalues;
+  int maxValues;
+} BitmapBuildState;
 
 /* bitmaputils.c */
 extern void BitmapFillMetaPage(Relation index, Page metaPage);
