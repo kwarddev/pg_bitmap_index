@@ -1,8 +1,7 @@
-#include "postgres.h"
-
 #include "access/amapi.h"
 #include "access/generic_xlog.h"
 #include "access/reloptions.h"
+#include "bitmap.h"
 #include "commands/vacuum.h"
 #include "storage/bufmgr.h"
 #include "storage/indexfsm.h"
@@ -12,9 +11,10 @@
 
 PG_MODULE_MAGIC;
 
-static IndexBuildResult *pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo);
-static bool pg_bitmap_validate(Oid opclassoid);
-Datum pg_bitmap_index_handler(PG_FUNCTION_ARGS);
+static IndexBuildResult *bmapbuild(Relation heap, Relation index, struct IndexInfo *indexInfo);
+static bool bitmap_index_validate(Oid opclassoid);
+void BitmapInitMetapage(Relation index, ForkNumber forknum);
+Datum bitmap_index_handler(PG_FUNCTION_ARGS);
 
 typedef struct BitmapEntry {
   Datum key;
@@ -27,10 +27,10 @@ typedef struct BitmapBuildState {
   uint64 nrows;
 } BitmapBuildState;
 
-PG_FUNCTION_INFO_V1(pg_bitmap_index_handler);
+PG_FUNCTION_INFO_V1(bitmap_index_handler);
 
 Datum
-pg_bitmap_index_handler(PG_FUNCTION_ARGS)
+bitmap_index_handler(PG_FUNCTION_ARGS)
 {
   IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 
@@ -47,14 +47,14 @@ pg_bitmap_index_handler(PG_FUNCTION_ARGS)
   amroutine->amcanparallel = false;
   amroutine->amcaninclude = false;
 
-  amroutine->ambuild = pg_bitmap_build;
+  amroutine->ambuild = bmapbuild;
   amroutine->ambuildempty = NULL;
   amroutine->aminsert = NULL;
   amroutine->ambulkdelete = NULL;
   amroutine->amvacuumcleanup = NULL;
   amroutine->amcanreturn = NULL;
   amroutine->amoptions = NULL;
-  amroutine->amvalidate = pg_bitmap_validate;
+  amroutine->amvalidate = bitmap_index_validate;
   amroutine->ambeginscan = NULL;
   amroutine->amrescan = NULL;
   amroutine->amgettuple = NULL;
@@ -67,7 +67,7 @@ pg_bitmap_index_handler(PG_FUNCTION_ARGS)
 }
 
 static void
-pg_bitmap_build_callback(Relation index,
+bitmap_index_build_callback(Relation index,
                          ItemPointer tid,
                          Datum *values,
                          bool *isnull,
@@ -80,7 +80,7 @@ pg_bitmap_build_callback(Relation index,
  * pg_bitmap_build() -- build a new bitmap index.
  */
 static IndexBuildResult *
-pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo)
+bmapbuild(Relation heap, Relation index, struct IndexInfo *indexInfo)
 {
   IndexBuildResult *result;
 	double reltuples;
@@ -94,15 +94,13 @@ pg_bitmap_build(Relation heap, Relation index, struct IndexInfo *indexInfo)
 			 RelationGetRelationName(index));
 
 
-
-
-
+  BitmapInitMetaPage(index, MAIN_FORKNUM);
 
 	return result;
 }
 
 static bool
-pg_bitmap_validate(Oid opclassoid)
+bitmap_validate(Oid opclassoid)
 {
     /* Optional: Add validation logic if needed */
     return true;
