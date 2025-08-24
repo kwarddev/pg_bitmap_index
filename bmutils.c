@@ -6,8 +6,8 @@
  *-------------------------------------------------------------------------
  */
 
-#include "access/generic_xlog.h"
 #include "bitmap.h"
+#include "access/generic_xlog.h"
 #include "storage/bufmgr.h"
 
 /*
@@ -34,7 +34,7 @@ makeDefaultBitmapOptions(void)
   BitmapOptions *opts;
 
   opts = (BitmapOptions *) palloc0(sizeof(BitmapOptions));
-  opts->maxDistinctValues = 10000;
+  opts->maxDistinctValues = 10;
 
   SET_VARSIZE(opts, sizeof(BitmapOptions));
 
@@ -70,6 +70,41 @@ BitmapFillMetapage(Relation index, Page metaPage) {
 
   /* If this fails, BitmapMetaPageData is probably too large for a page */
   Assert(((PageHeader) metaPage)->pd_lower <= ((PageHeader) metaPage)-> pd_upper);
+}
+
+void
+initBitmapState(BitmapState *state, Relation index)
+{
+  HASHCTL ctl;
+  Buffer metaBuffer;
+  BitmapMetaPageData *meta;
+  Page metaPage;
+  BitmapOptions *opts;
+
+  state->tmpCtx = AllocSetContextCreate(CurrentMemoryContext,
+                                        "Bitmap build temporary context",
+                                        ALLOCSET_DEFAULT_SIZES);
+
+  metaBuffer = ReadBuffer(index, BITMAP_METAPAGE_BLKNO);
+  LockBuffer(metaBuffer, BUFFER_LOCK_SHARE);
+  metaPage = BufferGetPage(metaBuffer);
+  meta = BitmapPageGetMeta(metaPage);
+  opts = &meta->opts;
+  state->maxValues = opts->maxDistinctValues;
+  UnlockReleaseBuffer(metaBuffer);
+
+  memset(&ctl, 0, sizeof(HASHCTL));
+  ctl.keysize = sizeof(Datum);
+  ctl.entrysize = sizeof(BitmapEntry);
+  ctl.hcxt = state->tmpCtx;
+
+  state->bmapHash = hash_create("Bitmap value hash",
+                                state->maxValues,
+                                &ctl,
+                                HASH_ELEM | HASH_CONTEXT);
+  state->indtuples = 0;
+  state->nrows = 0;
+  state->nvalues = 0;
 }
 
 void

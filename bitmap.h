@@ -17,6 +17,8 @@
 #include "storage/bufpage.h"
 #include "storage/relfilenode.h"
 #include "utils/relcache.h"
+#include "utils/memutils.h"
+#include "nodes/tidbitmap.h"
 
 /* Bitmap page flags */
 #define BITMAP_META    (1<<0)
@@ -61,7 +63,7 @@ typedef struct BitmapMetaPageData {
 #define BITMAP_MAGIC_NUMBER (0xB17BA9ED)
 
 typedef struct BitmapPageOpaqueData {
-  uint17 flags;          /* BITMAP_META, BITMAP_DATA, etc */
+  uint16 flags;          /* BITMAP_META, BITMAP_DATA, etc */
   uint16 bitmap_page_id; /* BITMAP_PAGE_ID for identification */
 } BitmapPageOpaqueData;
 
@@ -70,21 +72,27 @@ typedef BitmapPageOpaqueData *BitmapPageOpaque;
 #define BitmapPageGetMeta(page) ((BitmapMetaPageData *) PageGetContents(page))
 typedef struct BitmapEntry {
   Datum key;                  /* the distinct value */
-  uint8 *bitmap;              /* bitmap for this value */
+  TIDBitmap *tidbitmap;       /* TIDBitmap for this value */
 } BitmapEntry;
 
-typedef struct BitmapBuildState {
+typedef struct BitmapState {
   HTAB *bmapHash;
   MemoryContext tmpCtx;
   int64 indtuples;
   uint64 nrows;
   int nvalues;
   int maxValues;
+} BitmapState;
+
+typedef struct
+{
+	BitmapState	bmapstate;
 } BitmapBuildState;
 
 /* bitmaputils.c */
 extern void BitmapFillMetaPage(Relation index, Page metaPage);
 extern void BitmapInitMetaPage(Relation index, ForkNumber forknum);
 extern void BitmapInitPage(Page page, uint16 flags);
+extern void initBitmapState(BitmapState *state, Relation index);
 
 #endif
